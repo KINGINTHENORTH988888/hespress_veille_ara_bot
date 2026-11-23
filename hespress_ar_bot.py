@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 URL = "https://www.hespress.com/"
 HISTORY_FILE = "historique_hespress_ar.txt"
 DIGEST_FILE = "articles_du_jour_ar.json"
+MAX_ALERTS_PER_RUN = 6
 
 TELEGRAM_TOKEN = os.environ.get("HESPRESS_AR_TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -29,13 +30,11 @@ HEADERS = {
 KEYWORDS = {
     "DGSN": [
         "الأمن الوطني", "المديرية العامة للأمن الوطني", "الشرطة", "عميد الشرطة",
-        "فرقة", "الأمن العمومي", "الأمن", "ولاية الأمن",
-        "توقيف", "اعتقال", "الدرك الملكي"
+        "فرقة", "الأمن العمومي", "ولاية الأمن", "توقيف", "اعتقال", "الدرك الملكي"
     ],
     "BUDGET": [
         "قانون المالية", "الميزانية", "ميزانية", "لقجع",
-        "المالية", "الضريبة", "الضرائب", "الخزينة",
-        "الدعم الاجتماعي", "دعم", "المديونية", "الدين العمومي"
+        "الضريبة", "الضرائب", "الخزينة", "الدعم الاجتماعي", "المديونية", "الدين العمومي"
     ],
     "INTERIEUR": [
         "وزارة الداخلية", "الداخلية", "والي", "ولاة",
@@ -49,7 +48,7 @@ KEYWORDS = {
     "ECONOMIE": [
         "الاقتصاد", "اقتصادي", "الاستثمار", "استثمارات",
         "النمو", "الشغل", "التشغيل", "البطالة", "التصدير", "الصادرات",
-        "الصناعة", "السياحة", "البنك", "الأبناك", "التضخم", "السوق",
+        "الصناعة", "السياحة", "البنك", "الأبناك", "التضخم",
         "مقاولة", "مقاولات", "التجارة", "العقار", "الفندقة"
     ],
 }
@@ -59,6 +58,10 @@ EXCLUDED_PATHS = (
     "/contact", "/a-propos", "/mentions-legales", "/confidentialite",
     "/tous-les-articles", "/permalink/"
 )
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
 
 
 def normalize_ar(text: str) -> str:
@@ -113,9 +116,9 @@ def save_digest_buffer(items: list[dict]) -> None:
         json.dump(items, f, ensure_ascii=False, indent=2)
 
 
-def send_telegram(text: str, max_retries: int = 5) -> bool:
+def send_telegram(text: str, max_retries: int = 3) -> bool:
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("Secrets Telegram manquants.")
+        log("Secrets Telegram manquants.")
         return False
     api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -127,27 +130,27 @@ def send_telegram(text: str, max_retries: int = 5) -> bool:
 
     for attempt in range(1, max_retries + 1):
         try:
-            r = requests.post(api_url, json=payload, timeout=25)
+            r = requests.post(api_url, json=payload, timeout=15)
             if r.ok:
-                time.sleep(1.2)
+                time.sleep(1.5)
                 return True
 
             if r.status_code == 429:
-                retry_after = 15
+                retry_after = 10
                 try:
-                    retry_after = int(r.json().get("parameters", {}).get("retry_after", 15))
+                    retry_after = min(int(r.json().get("parameters", {}).get("retry_after", 10)), 25)
                 except Exception:
                     pass
-                wait_sec = retry_after + 2
-                print(f"Limite Telegram (429), attente {wait_sec}s (essai {attempt}/{max_retries})...")
+                wait_sec = retry_after + 1
+                log(f"Limite Telegram (429), attente {wait_sec}s (essai {attempt}/{max_retries})...")
                 time.sleep(wait_sec)
                 continue
 
-            print(f"Erreur Telegram ({r.status_code}) : {r.text}")
+            log(f"Erreur Telegram ({r.status_code}) : {r.text}")
             return False
         except Exception as e:
-            print(f"Exception Telegram (essai {attempt}/{max_retries}) : {e}")
-            time.sleep(3)
+            log(f"Exception Telegram (essai {attempt}/{max_retries}) : {e}")
+            time.sleep(2)
 
     return False
 
@@ -178,7 +181,7 @@ def looks_like_article_url(clean_href: str) -> bool:
 
 def fetch_article_summary(article_url: str, fallback: str = "") -> str:
     try:
-        r = requests.get(article_url, headers=HEADERS, timeout=20)
+        r = requests.get(article_url, headers=HEADERS, timeout=10)
         if not r.ok:
             return fallback
         soup = BeautifulSoup(r.text, "html.parser")
@@ -211,7 +214,7 @@ def fetch_article_summary(article_url: str, fallback: str = "") -> str:
 
 
 def fetch_hespress_articles() -> list[dict]:
-    resp = requests.get(URL, headers=HEADERS, timeout=25)
+    resp = requests.get(URL, headers=HEADERS, timeout=15)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -260,8 +263,9 @@ def run_realtime() -> None:
 
     try:
         articles = fetch_hespress_articles()
+        log(f"{len(articles)} articles candidats trouvés sur Hespress AR.")
     except Exception as e:
-        print(f"Erreur scraping : {e}")
+        log(f"Erreur scraping : {e}")
         return
 
     new_urls = []
@@ -269,6 +273,10 @@ def run_realtime() -> None:
     now_str = morocco_now().strftime("%H:%M")
 
     for art in articles:
+        if alerts_sent >= MAX_ALERTS_PER_RUN:
+            log(f"Plafond de {MAX_ALERTS_PER_RUN} alertes atteint pour ce run.")
+            break
+
         url = art["url"]
         if url in history:
             continue
@@ -302,12 +310,13 @@ def run_realtime() -> None:
                 "resume": full_summary,
                 "url": url,
             })
+            log(f"Alerte envoyée ({alerts_sent}/{MAX_ALERTS_PER_RUN}) [{axe} / {kw}]")
 
     if new_urls:
         save_history(new_urls)
         save_digest_buffer(buffer)
 
-    print(f"Terminé : {alerts_sent} nouvelle(s) alerte(s) envoyée(s).")
+    log(f"Terminé : {alerts_sent} nouvelle(s) alerte(s) envoyée(s).")
 
 
 def build_written_digest(items: list[dict], date_str: str) -> str:
