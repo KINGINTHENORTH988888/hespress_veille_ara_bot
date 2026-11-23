@@ -1,0 +1,61 @@
+name: Bot Hespress Veille AR
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+    - cron: "45 1 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Mode d'exécution (realtime ou digest)"
+        required: true
+        default: "realtime"
+        type: choice
+        options:
+          - realtime
+          - digest
+
+permissions:
+  contents: write
+
+jobs:
+  run-hespress-ar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Déterminer le mode d'exécution
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ inputs.mode }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.schedule }}" = "45 1 * * *" ]; then
+            echo "mode=digest" >> $GITHUB_OUTPUT
+          else
+            echo "mode=realtime" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Lancer le bot Hespress AR
+        env:
+          HESPRESS_AR_TELEGRAM_TOKEN: ${{ secrets.HESPRESS_AR_TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python hespress_ar_bot.py ${{ steps.mode.outputs.mode }}
+
+      - name: Sauvegarder l'historique et le tampon
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add historique_hespress_ar.txt articles_du_jour_ar.json || true
+          if ! git diff --staged --quiet; then
+            git commit -m "Update Hespress AR veille state"
+            git push
+          fi
