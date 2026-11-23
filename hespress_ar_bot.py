@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 URL = "https://www.hespress.com/"
 HISTORY_FILE = "historique_hespress_ar.txt"
 DIGEST_FILE = "articles_du_jour_ar.json"
-MAX_ALERTS_PER_RUN = 3
+MAX_ALERTS_PER_RUN = 1
 
 TELEGRAM_TOKEN = os.environ.get("HESPRESS_AR_TELEGRAM_TOKEN")
 CHAT_ID = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
@@ -130,26 +130,21 @@ def send_telegram(text: str, max_retries: int = 2) -> bool:
 
     for attempt in range(1, max_retries + 1):
         try:
-            r = requests.post(api_url, json=payload, timeout=10)
+            r = requests.post(api_url, json=payload, timeout=20)
             if r.ok:
                 time.sleep(1.5)
                 return True
 
             if r.status_code == 429:
-                retry_after = 5
-                try:
-                    retry_after = min(int(r.json().get("parameters", {}).get("retry_after", 5)), 8)
-                except Exception:
-                    pass
-                log(f"Limite Telegram (429), attente {retry_after}s (essai {attempt}/{max_retries})...")
-                time.sleep(retry_after)
+                log(f"Limite Telegram (429), attente 6s (essai {attempt}/{max_retries})...")
+                time.sleep(6)
                 continue
 
             log(f"Erreur Telegram ({r.status_code}) : {r.text}")
             return False
         except Exception as e:
             log(f"Exception Telegram (essai {attempt}/{max_retries}) : {e}")
-            time.sleep(2)
+            time.sleep(6)
 
     return False
 
