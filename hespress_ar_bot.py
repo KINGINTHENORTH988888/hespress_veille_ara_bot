@@ -13,10 +13,10 @@ from bs4 import BeautifulSoup
 URL = "https://www.hespress.com/"
 HISTORY_FILE = "historique_hespress_ar.txt"
 DIGEST_FILE = "articles_du_jour_ar.json"
-MAX_ALERTS_PER_RUN = 6
+MAX_ALERTS_PER_RUN = 3
 
 TELEGRAM_TOKEN = os.environ.get("HESPRESS_AR_TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+CHAT_ID = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
 
 HEADERS = {
     "User-Agent": (
@@ -116,7 +116,7 @@ def save_digest_buffer(items: list[dict]) -> None:
         json.dump(items, f, ensure_ascii=False, indent=2)
 
 
-def send_telegram(text: str, max_retries: int = 3) -> bool:
+def send_telegram(text: str, max_retries: int = 2) -> bool:
     if not TELEGRAM_TOKEN or not CHAT_ID:
         log("Secrets Telegram manquants.")
         return False
@@ -130,20 +130,19 @@ def send_telegram(text: str, max_retries: int = 3) -> bool:
 
     for attempt in range(1, max_retries + 1):
         try:
-            r = requests.post(api_url, json=payload, timeout=15)
+            r = requests.post(api_url, json=payload, timeout=10)
             if r.ok:
                 time.sleep(1.5)
                 return True
 
             if r.status_code == 429:
-                retry_after = 10
+                retry_after = 5
                 try:
-                    retry_after = min(int(r.json().get("parameters", {}).get("retry_after", 10)), 25)
+                    retry_after = min(int(r.json().get("parameters", {}).get("retry_after", 5)), 8)
                 except Exception:
                     pass
-                wait_sec = retry_after + 1
-                log(f"Limite Telegram (429), attente {wait_sec}s (essai {attempt}/{max_retries})...")
-                time.sleep(wait_sec)
+                log(f"Limite Telegram (429), attente {retry_after}s (essai {attempt}/{max_retries})...")
+                time.sleep(retry_after)
                 continue
 
             log(f"Erreur Telegram ({r.status_code}) : {r.text}")
@@ -181,7 +180,7 @@ def looks_like_article_url(clean_href: str) -> bool:
 
 def fetch_article_summary(article_url: str, fallback: str = "") -> str:
     try:
-        r = requests.get(article_url, headers=HEADERS, timeout=10)
+        r = requests.get(article_url, headers=HEADERS, timeout=8)
         if not r.ok:
             return fallback
         soup = BeautifulSoup(r.text, "html.parser")
@@ -214,7 +213,7 @@ def fetch_article_summary(article_url: str, fallback: str = "") -> str:
 
 
 def fetch_hespress_articles() -> list[dict]:
-    resp = requests.get(URL, headers=HEADERS, timeout=15)
+    resp = requests.get(URL, headers=HEADERS, timeout=12)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
