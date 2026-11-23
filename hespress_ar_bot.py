@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
@@ -63,7 +64,6 @@ EXCLUDED_PATHS = (
 def normalize_ar(text: str) -> str:
     if not text:
         return ""
-    # Supprime les voyelles courtes (tashkeel) et normalise certaines lettres arabes
     text = re.sub(r"[\u064B-\u065F\u0670]", "", text)
     text = re.sub(r"[إأآا]", "ا", text)
     text = re.sub(r"ى", "ي", text)
@@ -113,7 +113,7 @@ def save_digest_buffer(items: list[dict]) -> None:
         json.dump(items, f, ensure_ascii=False, indent=2)
 
 
-def send_telegram(text: str) -> bool:
+def send_telegram(text: str, max_retries: int = 5) -> bool:
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("Secrets Telegram manquants.")
         return False
@@ -124,15 +124,32 @@ def send_telegram(text: str) -> bool:
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    try:
-        r = requests.post(api_url, json=payload, timeout=15)
-        if not r.ok:
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = requests.post(api_url, json=payload, timeout=25)
+            if r.ok:
+                time.sleep(1.2)
+                return True
+
+            if r.status_code == 429:
+                retry_after = 15
+                try:
+                    retry_after = int(r.json().get("parameters", {}).get("retry_after", 15))
+                except Exception:
+                    pass
+                wait_sec = retry_after + 2
+                print(f"Limite Telegram (429), attente {wait_sec}s (essai {attempt}/{max_retries})...")
+                time.sleep(wait_sec)
+                continue
+
             print(f"Erreur Telegram ({r.status_code}) : {r.text}")
             return False
-        return True
-    except Exception as e:
-        print(f"Exception Telegram : {e}")
-        return False
+        except Exception as e:
+            print(f"Exception Telegram (essai {attempt}/{max_retries}) : {e}")
+            time.sleep(3)
+
+    return False
 
 
 def match_keyword(haystack_norm: str) -> tuple[str | None, str | None]:
@@ -161,7 +178,7 @@ def looks_like_article_url(clean_href: str) -> bool:
 
 def fetch_article_summary(article_url: str, fallback: str = "") -> str:
     try:
-        r = requests.get(article_url, headers=HEADERS, timeout=15)
+        r = requests.get(article_url, headers=HEADERS, timeout=20)
         if not r.ok:
             return fallback
         soup = BeautifulSoup(r.text, "html.parser")
@@ -194,7 +211,7 @@ def fetch_article_summary(article_url: str, fallback: str = "") -> str:
 
 
 def fetch_hespress_articles() -> list[dict]:
-    resp = requests.get(URL, headers=HEADERS, timeout=20)
+    resp = requests.get(URL, headers=HEADERS, timeout=25)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
