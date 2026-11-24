@@ -28,27 +28,74 @@ HEADERS = {
 
 KEYWORDS = {
     "DGSN": [
-        "الأمن الوطني", "المديرية العامة للأمن الوطني", "الشرطة", "عميد الشرطة",
-        "فرقة", "الأمن العمومي", "ولاية الأمن", "توقيف", "اعتقال", "الدرك الملكي"
+        "الأمن الوطني",
+        "المديرية العامة للأمن الوطني",
+        "الشرطة",
+        "عميد الشرطة",
+        "الأمن العمومي",
+        "ولاية الأمن",
+        "الدرك الملكي",
+        "توقيف",
+        "اعتقال",
     ],
     "BUDGET": [
-        "قانون المالية", "الميزانية", "ميزانية", "لقجع",
-        "الضريبة", "الضرائب", "الخزينة", "الدعم الاجتماعي", "المديونية", "الدين العمومي"
+        "قانون المالية",
+        "الميزانية",
+        "ميزانية",
+        "لقجع",
+        "الضريبة",
+        "الضرائب",
+        "الخزينة",
+        "الدعم الاجتماعي",
+        "المديونية",
+        "الدين العمومي",
     ],
     "INTERIEUR": [
-        "وزارة الداخلية", "الداخلية", "والي", "ولاة",
-        "عامل", "عمال", "قائد", "قياد",
-        "الإدارة الترابية", "الجماعات الترابية", "الجهة", "الجماعة", "الانتخابات"
+        "وزارة الداخلية",
+        "الداخلية",
+        "والي",
+        "ولاة",
+        "عامل إقليم",
+        "عمال الأقاليم",
+        "ولاة وعمال",
+        "قائد",
+        "قياد",
+        "الإدارة الترابية",
+        "الجماعات الترابية",
+        "الانتخابات",
     ],
     "SAHARA": [
-        "الصحراء", "الصحراء المغربية", "الأقاليم الجنوبية", "العيون",
-        "الداخلة", "الحكم الذاتي", "الأمم المتحدة", "مينورسو", "قنصلية"
+        "الصحراء المغربية",
+        "الأقاليم الجنوبية",
+        "الصحراء",
+        "العيون",
+        "الداخلة",
+        "الحكم الذاتي",
+        "الأمم المتحدة",
+        "مينورسو",
+        "قنصلية",
     ],
     "ECONOMIE": [
-        "الاقتصاد", "اقتصادي", "الاستثمار", "استثمارات",
-        "النمو", "الشغل", "التشغيل", "البطالة", "التصدير", "الصادرات",
-        "الصناعة", "السياحة", "البنك", "الأبناك", "التضخم",
-        "مقاولة", "مقاولات", "التجارة", "العقار", "الفندقة"
+        "الاقتصاد",
+        "اقتصادي",
+        "الاستثمار",
+        "استثمارات",
+        "النمو",
+        "الشغل",
+        "التشغيل",
+        "البطالة",
+        "التصدير",
+        "الصادرات",
+        "الصناعة",
+        "السياحة",
+        "البنك",
+        "الأبناك",
+        "التضخم",
+        "مقاولة",
+        "مقاولات",
+        "التجارة",
+        "العقار",
+        "الفندقة",
     ],
 }
 
@@ -111,10 +158,10 @@ def save_digest_buffer(items: list[dict]) -> None:
         json.dump(items, f, ensure_ascii=False, indent=2)
 
 
-def send_telegram(text: str) -> bool:
+def send_telegram(text: str) -> tuple[bool, bool]:
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("Secrets Telegram manquants.")
-        return False
+        return False, True
     api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -124,24 +171,37 @@ def send_telegram(text: str) -> bool:
     }
     try:
         r = requests.post(api_url, json=payload, timeout=15)
+        if r.status_code == 429:
+            print(f"Erreur Telegram (429) — arrêt immédiat du run : {r.text}")
+            return False, True
         if not r.ok:
             print(f"Erreur Telegram ({r.status_code}) : {r.text}")
-            return False
-        return True
+            return False, False
+        return True, False
     except Exception as e:
-        print(f"Exception Telegram : {e}")
-        return False
+        print(f"Exception Telegram — arrêt immédiat du run : {e}")
+        return False, True
 
 
 def match_keyword(haystack_norm: str) -> tuple[str | None, str | None]:
-    padded = f" {haystack_norm} "
+    tokens = set(re.findall(r"[\u0621-\u064A]+", haystack_norm))
+    padded = f" {' '.join(re.findall(r'[\u0621-\u064A]+', haystack_norm))} "
+
     for axe, words in KEYWORDS.items():
         for w in words:
             w_norm = normalize_ar(w)
             if not w_norm:
                 continue
-            if f" {w_norm} " in padded or w_norm in haystack_norm:
-                return axe, w
+            w_parts = re.findall(r"[\u0621-\u064A]+", w_norm)
+            if not w_parts:
+                continue
+            if len(w_parts) == 1:
+                if w_parts[0] in tokens:
+                    return axe, w
+            else:
+                phrase = " ".join(w_parts)
+                if f" {phrase} " in padded:
+                    return axe, w
     return None, None
 
 
@@ -155,6 +215,78 @@ def looks_like_article_url(clean_href: str) -> bool:
         return False
     slug = path.split("/")[-1]
     return len(slug) >= 10 and ("-" in slug or re.search(r"\d+", slug) is not None)
+
+
+def _is_valid_summary_text(txt: str, title: str) -> bool:
+    if not txt or len(txt) < 25:
+        return False
+    if txt == title or title in txt or txt in title:
+        return False
+    return True
+
+
+def extract_card_summary(anchor, title: str) -> str:
+    """Cherche d'abord un <p> ou une balise/classe d'extrait dans le parent de la carte."""
+    curr = anchor
+    for _ in range(3):
+        parent = curr.find_parent(["article", "div", "li"])
+        if not parent:
+            break
+
+        # 1) Priorité aux balises <p> ou éléments portant un indice d'extrait/résumé
+        candidates = []
+        for tag in parent.find_all(["p", "div", "span"], recursive=True):
+            if tag == anchor or anchor in tag.parents:
+                continue
+            if tag.find("a") is not None:
+                continue
+            cls_str = " ".join(tag.get("class") or []).lower()
+            is_excerpt_like = (
+                tag.name == "p"
+                or any(k in cls_str for k in ("excerpt", "summary", "chapo", "lead", "desc", "subtitle"))
+            )
+            if is_excerpt_like:
+                txt = re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
+                if _is_valid_summary_text(txt, title):
+                    candidates.append((0 if tag.name == "p" else 1, txt))
+
+        if candidates:
+            candidates.sort(key=lambda item: item[0])
+            return candidates[0][1]
+
+        # 2) Repli sur d'autres blocs texte simples dans le même parent
+        for tag in parent.find_all(["p", "span", "div"], recursive=True):
+            if tag == anchor or anchor in tag.parents or tag.find("a") is not None:
+                continue
+            txt = re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
+            if _is_valid_summary_text(txt, title):
+                return txt
+
+        curr = parent
+    return ""
+
+
+def fetch_article_summary_from_page(article_url: str, title: str) -> str:
+    """Repli uniquement appelé pour l'article retenu après filtrage mots-clés."""
+    try:
+        resp = requests.get(article_url, headers=HEADERS, timeout=12)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        for attrs in ({"name": "description"}, {"property": "og:description"}):
+            meta = soup.find("meta", attrs=attrs)
+            if meta and meta.get("content"):
+                desc = re.sub(r"\s+", " ", meta["content"]).strip()
+                if len(desc) >= 20 and desc != title and title not in desc:
+                    return desc
+
+        for p in soup.select("article p, .post-content p, .article-content p, main p"):
+            txt = re.sub(r"\s+", " ", p.get_text(" ", strip=True)).strip()
+            if len(txt) >= 35 and txt != title:
+                return txt
+    except Exception:
+        pass
+    return ""
 
 
 def fetch_hespress_articles() -> list[dict]:
@@ -182,14 +314,7 @@ def fetch_hespress_articles() -> list[dict]:
         if len(title) < 12:
             continue
 
-        parent = a.find_parent(["article", "div", "li"])
-        summary = ""
-        if parent:
-            p = parent.find("p")
-            if p:
-                summary = re.sub(r"\s+", " ", p.get_text(" ", strip=True)).strip()
-                if summary == title:
-                    summary = ""
+        summary = extract_card_summary(a, title)
 
         seen_urls.add(clean_href)
         articles.append({
@@ -228,9 +353,16 @@ def run_realtime() -> None:
         if not axe:
             continue
 
+        # Repli page article uniquement si l'article a passé le filtre mots-clés
+        raw_resume = art["resume"]
+        if not raw_resume:
+            raw_resume = fetch_article_summary_from_page(url, art["titre"])
+
         titre_clean = art["titre"][:220]
-        resume_clean = (art["resume"][:320] + "...") if len(art["resume"]) > 320 else (
-            art["resume"] or "الملخص غير متوفر حاليا، يرجى فتح الرابط لقراءة المقال."
+        resume_clean = (
+            (raw_resume[:320] + "...")
+            if len(raw_resume) > 320
+            else (raw_resume or "الملخص غير متوفر حاليا، يرجى فتح الرابط لقراءة المقال.")
         )
 
         msg = (
@@ -241,7 +373,10 @@ def run_realtime() -> None:
             f"<b>ملخص الخبر :</b> {html.escape(resume_clean)}"
         )
 
-        if send_telegram(msg):
+        ok, stop_run = send_telegram(msg)
+        if stop_run:
+            break
+        if ok:
             alerts_sent += 1
             new_urls.append(url)
             buffer.append({
@@ -308,7 +443,8 @@ def run_digest() -> None:
         return
 
     msg = build_written_digest(buffer, date_str)
-    if send_telegram(msg):
+    ok, _ = send_telegram(msg)
+    if ok:
         save_digest_buffer([])
 
 
