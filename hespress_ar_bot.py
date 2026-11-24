@@ -3,7 +3,6 @@ import json
 import os
 import re
 import sys
-import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
@@ -60,10 +59,6 @@ EXCLUDED_PATHS = (
 )
 
 
-def log(msg: str) -> None:
-    print(msg, flush=True)
-
-
 def normalize_ar(text: str) -> str:
     if not text:
         return ""
@@ -116,9 +111,9 @@ def save_digest_buffer(items: list[dict]) -> None:
         json.dump(items, f, ensure_ascii=False, indent=2)
 
 
-def send_telegram(text: str, max_retries: int = 2) -> bool:
+def send_telegram(text: str) -> bool:
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        log("Secrets Telegram manquants.")
+        print("Secrets Telegram manquants.")
         return False
     api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -127,26 +122,15 @@ def send_telegram(text: str, max_retries: int = 2) -> bool:
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            r = requests.post(api_url, json=payload, timeout=20)
-            if r.ok:
-                time.sleep(1.5)
-                return True
-
-            if r.status_code == 429:
-                log(f"Limite Telegram (429), attente 6s (essai {attempt}/{max_retries})...")
-                time.sleep(6)
-                continue
-
-            log(f"Erreur Telegram ({r.status_code}) : {r.text}")
+    try:
+        r = requests.post(api_url, json=payload, timeout=15)
+        if not r.ok:
+            print(f"Erreur Telegram ({r.status_code}) : {r.text}")
             return False
-        except Exception as e:
-            log(f"Exception Telegram (essai {attempt}/{max_retries}) : {e}")
-            time.sleep(6)
-
-    return False
+        return True
+    except Exception as e:
+        print(f"Exception Telegram : {e}")
+        return False
 
 
 def match_keyword(haystack_norm: str) -> tuple[str | None, str | None]:
@@ -173,42 +157,8 @@ def looks_like_article_url(clean_href: str) -> bool:
     return len(slug) >= 10 and ("-" in slug or re.search(r"\d+", slug) is not None)
 
 
-def fetch_article_summary(article_url: str, fallback: str = "") -> str:
-    try:
-        r = requests.get(article_url, headers=HEADERS, timeout=8)
-        if not r.ok:
-            return fallback
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        container = (
-            soup.select_one(".article-content")
-            or soup.select_one(".entry-content")
-            or soup.select_one("article")
-            or soup
-        )
-        paragraphs = []
-        for p in container.find_all("p"):
-            txt = re.sub(r"\s+", " ", p.get_text(" ", strip=True)).strip()
-            if len(txt) >= 40 and not txt.startswith(("اقرأ أيضا", "اقرأ أيضاً", "شارك")):
-                paragraphs.append(txt)
-            if len(" ".join(paragraphs)) >= 340:
-                break
-
-        if paragraphs:
-            joined = " ".join(paragraphs)
-            return (joined[:340] + "...") if len(joined) > 340 else joined
-
-        meta_desc = soup.find("meta", attrs={"name": "description"})
-        if meta_desc and meta_desc.get("content"):
-            desc = re.sub(r"\s+", " ", meta_desc["content"]).strip()
-            return (desc[:340] + "...") if len(desc) > 340 else desc
-    except Exception:
-        pass
-    return fallback
-
-
 def fetch_hespress_articles() -> list[dict]:
-    resp = requests.get(URL, headers=HEADERS, timeout=12)
+    resp = requests.get(URL, headers=HEADERS, timeout=15)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -257,9 +207,8 @@ def run_realtime() -> None:
 
     try:
         articles = fetch_hespress_articles()
-        log(f"{len(articles)} articles candidats trouvés sur Hespress AR.")
     except Exception as e:
-        log(f"Erreur scraping : {e}")
+        print(f"Erreur scraping : {e}")
         return
 
     new_urls = []
@@ -268,7 +217,6 @@ def run_realtime() -> None:
 
     for art in articles:
         if alerts_sent >= MAX_ALERTS_PER_RUN:
-            log(f"Plafond de {MAX_ALERTS_PER_RUN} alertes atteint pour ce run.")
             break
 
         url = art["url"]
@@ -281,16 +229,16 @@ def run_realtime() -> None:
             continue
 
         titre_clean = art["titre"][:220]
-        full_summary = fetch_article_summary(url, fallback=art["resume"])
-        if not full_summary:
-            full_summary = "الملخص غير متوفر حاليا، يرجى فتح الرابط لقراءة المقال."
+        resume_clean = (art["resume"][:320] + "...") if len(art["resume"]) > 320 else (
+            art["resume"] or "الملخص غير متوفر حاليا، يرجى فتح الرابط لقراءة المقال."
+        )
 
         msg = (
             f"<b>العنوان :</b> {html.escape(titre_clean)}\n"
             f"<b>الرابط :</b> <a href=\"{html.escape(url)}\">{html.escape(url)}</a>\n"
             f"<b>المحور :</b> {html.escape(axe)}\n"
             f"<b>الكلمة المفتاحية :</b> {html.escape(kw)}\n"
-            f"<b>ملخص الخبر :</b> {html.escape(full_summary)}"
+            f"<b>ملخص الخبر :</b> {html.escape(resume_clean)}"
         )
 
         if send_telegram(msg):
@@ -301,16 +249,15 @@ def run_realtime() -> None:
                 "axe": axe,
                 "mot_cle": kw,
                 "titre": titre_clean,
-                "resume": full_summary,
+                "resume": resume_clean,
                 "url": url,
             })
-            log(f"Alerte envoyée ({alerts_sent}/{MAX_ALERTS_PER_RUN}) [{axe} / {kw}]")
 
     if new_urls:
         save_history(new_urls)
         save_digest_buffer(buffer)
 
-    log(f"Terminé : {alerts_sent} nouvelle(s) alerte(s) envoyée(s).")
+    print(f"Terminé : {alerts_sent} nouvelle(s) alerte(s) envoyée(s).")
 
 
 def build_written_digest(items: list[dict], date_str: str) -> str:
