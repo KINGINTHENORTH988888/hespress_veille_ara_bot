@@ -184,8 +184,9 @@ def send_telegram(text: str) -> tuple[bool, bool]:
 
 
 def match_keyword(haystack_norm: str) -> tuple[str | None, str | None]:
-    tokens = set(re.findall(r"[\u0621-\u064A]+", haystack_norm))
-    padded = f" {' '.join(re.findall(r'[\u0621-\u064A]+', haystack_norm))} "
+    word_list = re.findall(r"[\u0621-\u064A]+", haystack_norm)
+    tokens = set(word_list)
+    padded = f" {' '.join(word_list)} "
 
     for axe, words in KEYWORDS.items():
         for w in words:
@@ -226,14 +227,12 @@ def _is_valid_summary_text(txt: str, title: str) -> bool:
 
 
 def extract_card_summary(anchor, title: str) -> str:
-    """Cherche d'abord un <p> ou une balise/classe d'extrait dans le parent de la carte."""
     curr = anchor
     for _ in range(3):
         parent = curr.find_parent(["article", "div", "li"])
         if not parent:
             break
 
-        # 1) Priorité aux balises <p> ou éléments portant un indice d'extrait/résumé
         candidates = []
         for tag in parent.find_all(["p", "div", "span"], recursive=True):
             if tag == anchor or anchor in tag.parents:
@@ -254,7 +253,6 @@ def extract_card_summary(anchor, title: str) -> str:
             candidates.sort(key=lambda item: item[0])
             return candidates[0][1]
 
-        # 2) Repli sur d'autres blocs texte simples dans le même parent
         for tag in parent.find_all(["p", "span", "div"], recursive=True):
             if tag == anchor or anchor in tag.parents or tag.find("a") is not None:
                 continue
@@ -267,7 +265,6 @@ def extract_card_summary(anchor, title: str) -> str:
 
 
 def fetch_article_summary_from_page(article_url: str, title: str) -> str:
-    """Repli uniquement appelé pour l'article retenu après filtrage mots-clés."""
     try:
         resp = requests.get(article_url, headers=HEADERS, timeout=12)
         resp.raise_for_status()
@@ -353,7 +350,6 @@ def run_realtime() -> None:
         if not axe:
             continue
 
-        # Repli page article uniquement si l'article a passé le filtre mots-clés
         raw_resume = art["resume"]
         if not raw_resume:
             raw_resume = fetch_article_summary_from_page(url, art["titre"])
