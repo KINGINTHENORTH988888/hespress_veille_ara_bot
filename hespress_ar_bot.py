@@ -30,6 +30,7 @@ KEYWORDS = {
     "DGSN": [
         "الأمن الوطني",
         "المديرية العامة للأمن الوطني",
+        "الشرطة القضائية",
         "الشرطة",
         "عميد الشرطة",
         "الأمن العمومي",
@@ -41,25 +42,30 @@ KEYWORDS = {
     "BUDGET": [
         "قانون المالية",
         "الميزانية",
-        "ميزانية",
+        "ميزانية الدولة",
+        "فوزي لقجع",
         "لقجع",
         "الضريبة",
         "الضرائب",
-        "الخزينة",
+        "الخزينة العامة",
         "الدعم الاجتماعي",
         "المديونية",
         "الدين العمومي",
     ],
     "INTERIEUR": [
         "وزارة الداخلية",
-        "الداخلية",
-        "والي",
-        "ولاة",
+        "وزير الداخلية",
+        "مصالح الداخلية",
+        "الوالي",
+        "الولاة",
         "عامل إقليم",
+        "عامل عمالة",
         "عمال الأقاليم",
         "ولاة وعمال",
-        "قائد",
-        "قياد",
+        "السلطات المحلية",
+        "السلطة المحلية",
+        "القياد",
+        "باشا",
         "الإدارة الترابية",
         "الجماعات الترابية",
         "الانتخابات",
@@ -67,7 +73,7 @@ KEYWORDS = {
     "SAHARA": [
         "الصحراء المغربية",
         "الأقاليم الجنوبية",
-        "الصحراء",
+        "قضية الصحراء",
         "العيون",
         "الداخلة",
         "الحكم الذاتي",
@@ -76,28 +82,45 @@ KEYWORDS = {
         "قنصلية",
     ],
     "ECONOMIE": [
+        "الاقتصاد المغربي",
         "الاقتصاد",
-        "اقتصادي",
         "الاستثمار",
         "استثمارات",
-        "النمو",
-        "الشغل",
+        "النمو الاقتصادي",
+        "سوق الشغل",
         "التشغيل",
         "البطالة",
         "التصدير",
         "الصادرات",
         "الصناعة",
         "السياحة",
-        "البنك",
+        "بنك المغرب",
         "الأبناك",
         "التضخم",
         "مقاولة",
         "مقاولات",
-        "التجارة",
+        "التجارة الخارجية",
         "العقار",
         "الفندقة",
     ],
 }
+
+# Mots-clés d'exclusion (culture, cinéma, sport, jeux vidéo) pour éviter le hors-sujet
+NEGATIVE_KEYWORDS = [
+    "المهرجان الدولي للفيلم",
+    "مهرجان الفيلم",
+    "الممثل",
+    "الممثلة",
+    "سينما",
+    "فيلم",
+    "مسلسل",
+    "أغنية",
+    "فنان",
+    "كرة القدم",
+    "البطولة الاحترافية",
+    "دوري أبطال",
+    "الألعاب الإلكترونية",
+]
 
 EXCLUDED_PATHS = (
     "/category/", "/tag/", "/author/", "/videos/", "/medias/",
@@ -183,7 +206,30 @@ def send_telegram(text: str) -> tuple[bool, bool]:
         return False, True
 
 
+def is_excluded_topic(haystack_norm: str) -> bool:
+    word_list = re.findall(r"[\u0621-\u064A]+", haystack_norm)
+    tokens = set(word_list)
+    padded = f" {' '.join(word_list)} "
+
+    for neg in NEGATIVE_KEYWORDS:
+        neg_norm = normalize_ar(neg)
+        neg_parts = re.findall(r"[\u0621-\u064A]+", neg_norm)
+        if not neg_parts:
+            continue
+        if len(neg_parts) == 1:
+            if neg_parts[0] in tokens:
+                return True
+        else:
+            phrase = " ".join(neg_parts)
+            if f" {phrase} " in padded:
+                return True
+    return False
+
+
 def match_keyword(haystack_norm: str) -> tuple[str | None, str | None]:
+    if is_excluded_topic(haystack_norm):
+        return None, None
+
     word_list = re.findall(r"[\u0621-\u064A]+", haystack_norm)
     tokens = set(word_list)
     padded = f" {' '.join(word_list)} "
@@ -353,6 +399,9 @@ def run_realtime() -> None:
         raw_resume = art["resume"]
         if not raw_resume:
             raw_resume = fetch_article_summary_from_page(url, art["titre"])
+            # Vérification supplémentaire avec le résumé complet de l'article
+            if raw_resume and is_excluded_topic(normalize_ar(f"{art['titre']} {raw_resume}")):
+                continue
 
         titre_clean = art["titre"][:220]
         resume_clean = (
